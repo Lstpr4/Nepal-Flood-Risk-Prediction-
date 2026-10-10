@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pathlib import Path
 
 import kagglehub
@@ -13,6 +14,9 @@ from sklearn.metrics import (
 from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import TimeSeriesSplit
 from xgboost import XGBClassifier
+BASE_DIR = Path(__file__).resolve().parent
+RESULTS_DIR = BASE_DIR / "results"
+MODEL_TAG = "xgb"
 
 #the kaggle dataset I am using
 DATASET_SLUG = "tejal5kunjir/nepal-flood-and-weather-dataset-2023-2026"
@@ -48,6 +52,20 @@ PHYSICS_PRECIP7_TRAIN_QUANTILE = 0.60
 PHYSICS_DISCHARGE_LAG1_TRAIN_QUANTILE = 0.65
 #never alert below this probability (cuts false alarms; lowers recall slightly)
 ALERT_PROB_FLOOR = 0.68
+
+XGB_MODEL_PARAMS = {
+    "n_estimators": 900,
+    "max_depth": 5,
+    "learning_rate": 0.025,
+    "min_child_weight": 4,
+    "gamma": 0.2,
+    "subsample": 0.88,
+    "colsample_bytree": 0.88,
+    "early_stopping_rounds": 50,
+    "eval_metric": "auc",
+    "random_state": RANDOM_STATE,
+    "scale_pos_weight_note": "computed per fold: (neg/pos) * SCALE_POS_WEIGHT_FACTOR",
+}
 
 #features used to train the model
 FEATURES = [
@@ -149,17 +167,17 @@ def train_station_model(X_fit, y_fit, X_val, y_val) -> XGBClassifier:
 
     #the model we are using to train the model
     model = XGBClassifier(
-        n_estimators=900,#number of trees in the model
-        max_depth=5,
-        learning_rate=0.025,
-        min_child_weight=4,#minimum weight of a leaf node
-        gamma=0.2,#minimum loss reduction required to make a split
-        subsample=0.88,#fraction of the data to be used for training the model
-        colsample_bytree=0.88,#fraction of the features to be used for training the model
+        n_estimators=XGB_MODEL_PARAMS["n_estimators"],
+        max_depth=XGB_MODEL_PARAMS["max_depth"],
+        learning_rate=XGB_MODEL_PARAMS["learning_rate"],
+        min_child_weight=XGB_MODEL_PARAMS["min_child_weight"],
+        gamma=XGB_MODEL_PARAMS["gamma"],
+        subsample=XGB_MODEL_PARAMS["subsample"],
+        colsample_bytree=XGB_MODEL_PARAMS["colsample_bytree"],
         scale_pos_weight=scale_pos_weight,
-        early_stopping_rounds=50,
-        random_state=RANDOM_STATE,
-        eval_metric="auc",
+        early_stopping_rounds=XGB_MODEL_PARAMS["early_stopping_rounds"],
+        random_state=XGB_MODEL_PARAMS["random_state"],
+        eval_metric=XGB_MODEL_PARAMS["eval_metric"],
     )
     model.fit(X_fit, y_fit, eval_set=[(X_val, y_val)], verbose=False)
     return model
@@ -304,6 +322,124 @@ def evaluate_station_split(
         "y_prob": test_prob,
     }
 
+def _pipeline_settings() -> dict:
+    return {
+        "model_tag": MODEL_TAG,
+        "dataset_slug": DATASET_SLUG,
+        "csv_name": CSV_NAME,
+        "risk_quantile": RISK_QUANTILE,
+        "min_precision": MIN_PRECISION,
+        "min_recall_when_tuning": MIN_RECALL_WHEN_TUNING,
+        "n_splits": N_SPLITS,
+        "random_state": RANDOM_STATE,
+        "val_fraction": VAL_FRACTION,
+        "scale_pos_weight_factor": SCALE_POS_WEIGHT_FACTOR,
+        "use_probability_calibration": USE_PROBABILITY_CALIBRATION,
+        "use_physics_gate": USE_PHYSICS_GATE,
+        "physics_precip7_train_quantile": PHYSICS_PRECIP7_TRAIN_QUANTILE,
+        "physics_discharge_lag1_train_quantile": PHYSICS_DISCHARGE_LAG1_TRAIN_QUANTILE,
+        "alert_prob_floor": ALERT_PROB_FLOOR,
+        "xgb_model_params": XGB_MODEL_PARAMS,
+    }
+
+
+def _write_key_values(fh, mapping: dict, prefix: str = "") -> None:
+    for key, value in mapping.items():
+        label = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            _write_key_values(fh, value, prefix=f"{label}.")
+        else:
+            fh.write(f"{label} = {value}\n")
+
+
+def save_run_artifacts(
+    fold_rows: list[dict],
+    macro: dict,
+    micro: dict,
+    false_alarms: int,
+    alerts: int,
+    pooled_true: list[int],
+    pooled_pred: list[int],
+    pooled_prob: list[float],
+) -> None:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    run_ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    summary_rows = [
+        {"level": "macro", **macro},
+        {"level": "micro", **micro},
+        {
+            "level": "operational",
+            "false_alarms": false_alarms,
+            "alerts": alerts,
+            "false_alarm_rate": false_alarms / alerts if alerts else 0.0,
+        },
+    ]
+    metrics_df = pd.concat(
+        [pd.DataFrame(fold_rows), pd.DataFrame(summary_rows)],
+        ignore_index=True,
+    )
+    metrics_path = RESULTS_DIR / f"{MODEL_TAG}_metrics_{run_ts}.csv"
+    metrics_df.to_csv(metrics_path, index=False)
+
+    pred_df = pd.DataFrame(
+        {"y_true": pooled_true, "y_pred": pooled_pred, "y_prob": pooled_prob}
+    )
+    pred_path = RESULTS_DIR / f"{MODEL_TAG}_predictions_{run_ts}.csv"
+    pred_df.to_csv(pred_path, index=False)
+
+    settings = _pipeline_settings()
+    settings["run_timestamp_utc"] = run_ts
+    settings["summary_macro"] = macro
+    settings["summary_micro"] = micro
+    settings["false_alarms"] = false_alarms
+    settings["alerts"] = alerts
+    best_f1_row = max(fold_rows, key=lambda r: r.get("f1", -1)) if fold_rows else None
+    settings_path = RESULTS_DIR / f"{MODEL_TAG}_settings_{run_ts}.txt"
+    with settings_path.open("w", encoding="utf-8") as fh:
+        fh.write(f"Model run: {MODEL_TAG}\n")
+        fh.write(f"Timestamp (UTC): {run_ts}\n\n")
+        fh.write("=== Pipeline / threshold settings ===\n")
+        for key, value in settings.items():
+            if key in ("xgb_model_params", "summary_macro", "summary_micro"):
+                continue
+            fh.write(f"{key} = {value}\n")
+        fh.write("\n=== XGB hyperparameters (fixed for this project) ===\n")
+        _write_key_values(fh, XGB_MODEL_PARAMS, prefix="xgb")
+        fh.write("\n=== Best fold by test F1 ===\n")
+        if best_f1_row:
+            _write_key_values(
+                fh,
+                {k: v for k, v in best_f1_row.items() if k != "level"},
+                prefix="best_fold",
+            )
+        else:
+            fh.write("best_fold = (none)\n")
+        fh.write("\n=== Summary metrics (macro = mean over station-folds) ===\n")
+        _write_key_values(fh, macro, prefix="macro")
+        _write_key_values(fh, micro, prefix="micro")
+        fh.write(f"operational_false_alarms = {false_alarms}\n")
+        fh.write(f"operational_alerts = {alerts}\n")
+        fh.write(
+            f"operational_false_alarm_rate = "
+            f"{false_alarms / alerts if alerts else 0.0:.6f}\n"
+        )
+        fh.write(
+            f"\nMetrics CSV: {metrics_path.name}\n"
+            f"Predictions CSV: {pred_path.name}\n"
+        )
+
+    latest_settings = RESULTS_DIR / f"{MODEL_TAG}_settings_latest.txt"
+    latest_metrics = RESULTS_DIR / f"{MODEL_TAG}_metrics_latest.csv"
+    latest_settings.write_text(settings_path.read_text(encoding="utf-8"), encoding="utf-8")
+    metrics_df.to_csv(latest_metrics, index=False)
+
+    print(f"\nSaved results to {RESULTS_DIR}/")
+    print(f"  {metrics_path.name}")
+    print(f"  {pred_path.name}")
+    print(f"  {settings_path.name}")
+
+
 #main function to run the model
 def main() -> None:
     df = add_location_features(load_data())
@@ -311,6 +447,7 @@ def main() -> None:
     
     #lists to store the metrics for the model
     split_metrics: list[dict] = []
+    fold_rows: list[dict] = []
     scorable_metrics: list[dict] = []
     pooled_true: list[int] = []
     pooled_pred: list[int] = []
@@ -346,6 +483,19 @@ def main() -> None:
                 continue
 
             split_metrics.append(result)
+            fold_rows.append(
+                {
+                    "level": "fold",
+                    "location": location,
+                    "fold": fold + 1,
+                    "threshold": result["threshold"],
+                    "roc_auc": result["roc_auc"],
+                    "accuracy": result["accuracy"],
+                    "precision": result["precision"],
+                    "recall": result["recall"],
+                    "f1": result["f1"],
+                }
+            )
             failed = result["f1"] == 0 and result["y_true"].sum() >= MIN_TEST_POSITIVES
             if not failed:
                 scorable_metrics.append(result)
@@ -409,5 +559,17 @@ def main() -> None:
         f"False alarms: {false_alarms} / {alerts} alerts "
         f"({false_alarm_rate * 100:.1f}% of alerts were wrong)"
     )
+    save_run_artifacts(
+        fold_rows,
+        macro,
+        micro,
+        false_alarms,
+        alerts,
+        pooled_true,
+        pooled_pred,
+        pooled_prob,
+    )
+
+
 if __name__ == "__main__":
     main()
