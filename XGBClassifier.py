@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -52,6 +53,23 @@ PHYSICS_PRECIP7_TRAIN_QUANTILE = 0.60
 PHYSICS_DISCHARGE_LAG1_TRAIN_QUANTILE = 0.65
 #never alert below this probability (cuts false alarms; lowers recall slightly)
 ALERT_PROB_FLOOR = 0.68
+
+# 0 = high discharge on the same day as features; 1 = high discharge tomorrow
+PREDICTION_HORIZON_DAYS = 1
+
+ENABLE_HYPERPARAMETER_SEARCH = True
+HYPERPARAMETER_SEARCH_ITERATIONS = 24
+SEARCH_N_ESTIMATORS = 350
+THRESHOLD_GRID_POINTS = 181
+
+XGB_TUNABLE_KEYS = (
+    "max_depth",
+    "learning_rate",
+    "min_child_weight",
+    "gamma",
+    "subsample",
+    "colsample_bytree",
+)
 
 XGB_MODEL_PARAMS = {
     "n_estimators": 900,
@@ -140,6 +158,39 @@ def station_labels(series: pd.Series, quantile: float) -> pd.Series:
   threshold = series.quantile(quantile)
   return (series > threshold).astype(int)
 
+
+def _future_discharge(df: pd.DataFrame, horizon: int) -> pd.Series:
+    if horizon == 0:
+        return df["river_discharge_m3s"]
+    return df.groupby("location", group_keys=False)["river_discharge_m3s"].shift(
+        -horizon
+    )
+
+
+def prepare_station_horizon_frames(
+    station_train: pd.DataFrame,
+    station_test: pd.DataFrame,
+    quantile: float,
+    horizon: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series] | tuple[None, None, None, None]:
+    if horizon == 0:
+        y_train = station_labels(station_train["river_discharge_m3s"], quantile)
+        y_test = station_labels(station_test["river_discharge_m3s"], quantile)
+        return station_train, station_test, y_train, y_test
+
+    train_threshold = station_train["river_discharge_m3s"].quantile(quantile)
+    tr = station_train.copy()
+    te = station_test.copy()
+    tr_target = _future_discharge(tr, horizon)
+    te_target = _future_discharge(te, horizon)
+    tr = tr.loc[tr_target.notna()]
+    te = te.loc[te_target.notna()]
+    tr_target = tr_target.loc[tr.index]
+    te_target = te_target.loc[te.index]
+    y_train = (tr_target > train_threshold).astype(int)
+    y_test = (te_target > train_threshold).astype(int)
+    return tr, te, y_train, y_test
+
 #function to split the data into training and validation sets
 def split_station_train_val(
   station_train: pd.DataFrame,
@@ -159,28 +210,103 @@ def split_station_train_val(
         y_train.loc[val_mask],
     )
 
-#The name speaks for itself..
-def train_station_model(X_fit, y_fit, X_val, y_val) -> XGBClassifier:
-    positives = int(y_fit.sum())
-    negatives = len(y_fit) - positives
-    scale_pos_weight = (negatives / max(positives, 1)) * SCALE_POS_WEIGHT_FACTOR
+def _scale_pos_weight(y: pd.Series | np.ndarray) -> float:
+    positives = int(np.asarray(y).sum())
+    negatives = len(y) - positives
+    return (negatives / max(positives, 1)) * SCALE_POS_WEIGHT_FACTOR
 
-    #the model we are using to train the model
-    model = XGBClassifier(
-        n_estimators=XGB_MODEL_PARAMS["n_estimators"],
-        max_depth=XGB_MODEL_PARAMS["max_depth"],
-        learning_rate=XGB_MODEL_PARAMS["learning_rate"],
-        min_child_weight=XGB_MODEL_PARAMS["min_child_weight"],
-        gamma=XGB_MODEL_PARAMS["gamma"],
-        subsample=XGB_MODEL_PARAMS["subsample"],
-        colsample_bytree=XGB_MODEL_PARAMS["colsample_bytree"],
-        scale_pos_weight=scale_pos_weight,
+
+def _default_xgb_params() -> dict:
+    return {key: XGB_MODEL_PARAMS[key] for key in XGB_TUNABLE_KEYS}
+
+
+def _sample_xgb_params(rng: np.random.Generator) -> dict:
+    return {
+        "max_depth": int(rng.choice([3, 4, 5, 6, 7])),
+        "learning_rate": float(rng.choice([0.01, 0.025, 0.05])),
+        "min_child_weight": int(rng.choice([2, 3, 4, 6, 8])),
+        "gamma": float(rng.choice([0.0, 0.1, 0.2, 0.3])),
+        "subsample": float(rng.choice([0.8, 0.85, 0.88, 0.9])),
+        "colsample_bytree": float(rng.choice([0.8, 0.85, 0.88, 0.9])),
+    }
+
+
+def _make_xgb(
+    xgb_params: dict,
+    n_estimators: int,
+    scale_pos_weight: float,
+    early_stopping_rounds: int | None,
+) -> XGBClassifier:
+    kwargs: dict = {
+        "n_estimators": n_estimators,
+        "max_depth": xgb_params["max_depth"],
+        "learning_rate": xgb_params["learning_rate"],
+        "min_child_weight": xgb_params["min_child_weight"],
+        "gamma": xgb_params["gamma"],
+        "subsample": xgb_params["subsample"],
+        "colsample_bytree": xgb_params["colsample_bytree"],
+        "scale_pos_weight": scale_pos_weight,
+        "random_state": XGB_MODEL_PARAMS["random_state"],
+        "eval_metric": XGB_MODEL_PARAMS["eval_metric"],
+    }
+    if early_stopping_rounds is not None:
+        kwargs["early_stopping_rounds"] = early_stopping_rounds
+    return XGBClassifier(**kwargs)
+
+
+def hyperparameter_search(
+    X_fit: pd.DataFrame,
+    y_fit: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    n_iter: int,
+) -> dict:
+    rng = np.random.default_rng(RANDOM_STATE)
+    best_score = -1.0
+    best_params = _sample_xgb_params(rng)
+    y_val_np = y_val.to_numpy()
+    if len(np.unique(y_val_np)) < 2:
+        return best_params
+
+    spw = _scale_pos_weight(y_fit)
+    for _ in range(n_iter):
+        params = _sample_xgb_params(rng)
+        model = _make_xgb(
+            params,
+            SEARCH_N_ESTIMATORS,
+            spw,
+            early_stopping_rounds=XGB_MODEL_PARAMS["early_stopping_rounds"],
+        )
+        model.fit(X_fit, y_fit, eval_set=[(X_val, y_val)], verbose=False)
+        val_prob = model.predict_proba(X_val)[:, 1]
+        score = roc_auc_score(y_val_np, val_prob)
+        if score > best_score:
+            best_score = score
+            best_params = params
+
+    return best_params
+
+
+def train_station_model(
+    X_fit,
+    y_fit,
+    X_val,
+    y_val,
+    xgb_params: dict | None = None,
+) -> XGBClassifier:
+    params = xgb_params if xgb_params is not None else _default_xgb_params()
+    model = _make_xgb(
+        params,
+        XGB_MODEL_PARAMS["n_estimators"],
+        _scale_pos_weight(y_fit),
         early_stopping_rounds=XGB_MODEL_PARAMS["early_stopping_rounds"],
-        random_state=XGB_MODEL_PARAMS["random_state"],
-        eval_metric=XGB_MODEL_PARAMS["eval_metric"],
     )
     model.fit(X_fit, y_fit, eval_set=[(X_val, y_val)], verbose=False)
     return model
+
+
+def _flatten_xgb_params(params: dict) -> dict:
+    return {f"xgb_{key}": value for key, value in params.items()}
 
 #used to calculate the fbeta score
 def fbeta_score(precision: float, recall: float, beta: float = 0.5) -> float:
@@ -221,7 +347,8 @@ def pick_threshold(
     best_score = -1.0
     best_precision = -1.0
 
-    for threshold in np.linspace(0.05, 0.95, 91):
+    thresholds = np.linspace(0.05, 0.95, THRESHOLD_GRID_POINTS)
+    for threshold in thresholds:
         pred = (y_prob >= threshold).astype(int)
         precision = precision_score(y_true, pred, zero_division=0)
         recall = recall_score(y_true, pred, zero_division=0)
@@ -245,8 +372,7 @@ def pick_threshold(
             best_threshold = float(threshold)
 
     if best_score < 0:
-        #linear space is used to create a list of thresholds
-        for threshold in np.linspace(0.05, 0.95, 91):
+        for threshold in thresholds:
             pred = (y_prob >= threshold).astype(int)
             precision = precision_score(y_true, pred, zero_division=0)
             recall = recall_score(y_true, pred, zero_division=0)
@@ -257,12 +383,31 @@ def pick_threshold(
                     best_threshold = float(threshold)
 
     if best_score < 0:
-        for threshold in np.linspace(0.05, 0.95, 91):
+        for threshold in thresholds:
             pred = (y_prob >= threshold).astype(int)
             score = f1_score(y_true, pred, zero_division=0)
             if score > best_score:
                 best_score = score
                 best_threshold = float(threshold)
+
+    low = max(0.01, best_threshold - 0.08)
+    high = min(0.99, best_threshold + 0.08)
+    for threshold in np.linspace(low, high, 81):
+        pred = (y_prob >= threshold).astype(int)
+        precision = precision_score(y_true, pred, zero_division=0)
+        recall = recall_score(y_true, pred, zero_division=0)
+        score = fbeta_score(precision, recall, beta=0.5)
+        if (
+            precision >= min_precision
+            and recall >= min_recall
+            and (
+                score > best_score
+                or (score == best_score and precision > best_precision)
+            )
+        ):
+            best_score = score
+            best_precision = precision
+            best_threshold = float(threshold)
 
     return best_threshold
 
@@ -272,12 +417,17 @@ def evaluate_station_split(
     station_test: pd.DataFrame,
     quantile: float,
     min_precision: float,
+    location: str,
+    fold: int,
 ) -> dict | None:
     if len(station_train) < MIN_TRAIN_ROWS or len(station_test) == 0:
         return None
-    #creates labels for the training and test sets
-    y_train = station_labels(station_train["river_discharge_m3s"], quantile)
-    y_test = station_labels(station_test["river_discharge_m3s"], quantile)
+
+    tr, te, y_train, y_test = prepare_station_horizon_frames(
+        station_train, station_test, quantile, PREDICTION_HORIZON_DAYS
+    )
+    if len(tr) < MIN_TRAIN_ROWS or len(te) == 0:
+        return None
 
     if (
         y_train.sum() < MIN_TRAIN_POSITIVES
@@ -286,37 +436,58 @@ def evaluate_station_split(
     ):
         return None
 
-    X_fit, y_fit, X_val, y_val = split_station_train_val(
-        station_train, y_train, VAL_FRACTION
-    )
+    X_fit, y_fit, X_val, y_val = split_station_train_val(tr, y_train, VAL_FRACTION)
     if y_fit.sum() == 0 or len(np.unique(y_val)) < 2:
         return None
 
-    model = train_station_model(X_fit, y_fit, X_val, y_val)
-    val_prob = model.predict_proba(X_val)[:, 1]
-    test_prob = model.predict_proba(station_test[FEATURES])[:, 1]
-
-    if USE_PROBABILITY_CALIBRATION:
-        val_prob, test_prob = calibrate_probabilities(
-            y_val.to_numpy(), val_prob, test_prob
+    t0 = time.perf_counter()
+    if ENABLE_HYPERPARAMETER_SEARCH:
+        xgb_params = hyperparameter_search(
+            X_fit, y_fit, X_val, y_val, HYPERPARAMETER_SEARCH_ITERATIONS
         )
+    else:
+        xgb_params = _default_xgb_params()
+
+    model = train_station_model(X_fit, y_fit, X_val, y_val, xgb_params=xgb_params)
+    fit_prob = model.predict_proba(X_fit)[:, 1]
+    val_prob = model.predict_proba(X_val)[:, 1]
+    test_prob = model.predict_proba(te[FEATURES])[:, 1]
+
+    if USE_PROBABILITY_CALIBRATION and len(np.unique(y_val)) >= 2:
+        calibrator = IsotonicRegression(out_of_bounds="clip")
+        calibrator.fit(val_prob, y_val.to_numpy())
+        fit_prob = calibrator.predict(fit_prob)
+        val_prob = calibrator.predict(val_prob)
+        test_prob = calibrator.predict(test_prob)
 
     threshold = pick_threshold(y_val.to_numpy(), val_prob, min_precision)
     effective_threshold = max(threshold, ALERT_PROB_FLOOR)
+    train_f1 = f1_score(
+        y_fit,
+        (fit_prob >= effective_threshold).astype(int),
+        zero_division=0,
+    )
     test_pred = (test_prob >= effective_threshold).astype(int)
 
     if USE_PHYSICS_GATE:
-        gate = physics_gate_mask(station_train, station_test)
+        gate = physics_gate_mask(station_train, te)
         test_pred = (test_pred.astype(bool) & gate).astype(int)
 
+    elapsed = time.perf_counter() - t0
     y_true = y_test.to_numpy()
+    test_f1 = f1_score(y_true, test_pred, zero_division=0)
+    print(f"  [{location} fold {fold}] tuned in {elapsed:.1f}s", flush=True)
+
     return {
         "threshold": effective_threshold,
+        "best_xgb_params": xgb_params,
+        "train_f1": train_f1,
+        "train_test_f1_gap": train_f1 - test_f1,
         "roc_auc": roc_auc_score(y_true, test_prob),
         "accuracy": accuracy_score(y_true, test_pred),
         "precision": precision_score(y_true, test_pred, zero_division=0),
         "recall": recall_score(y_true, test_pred, zero_division=0),
-        "f1": f1_score(y_true, test_pred, zero_division=0),
+        "f1": test_f1,
         "y_true": y_true,
         "y_pred": test_pred,
         "y_prob": test_prob,
@@ -339,6 +510,11 @@ def _pipeline_settings() -> dict:
         "physics_precip7_train_quantile": PHYSICS_PRECIP7_TRAIN_QUANTILE,
         "physics_discharge_lag1_train_quantile": PHYSICS_DISCHARGE_LAG1_TRAIN_QUANTILE,
         "alert_prob_floor": ALERT_PROB_FLOOR,
+        "prediction_horizon_days": PREDICTION_HORIZON_DAYS,
+        "enable_hyperparameter_search": ENABLE_HYPERPARAMETER_SEARCH,
+        "hyperparameter_search_iterations": HYPERPARAMETER_SEARCH_ITERATIONS,
+        "search_n_estimators": SEARCH_N_ESTIMATORS,
+        "threshold_grid_points": THRESHOLD_GRID_POINTS,
         "xgb_model_params": XGB_MODEL_PARAMS,
     }
 
@@ -404,8 +580,11 @@ def save_run_artifacts(
             if key in ("xgb_model_params", "summary_macro", "summary_micro"):
                 continue
             fh.write(f"{key} = {value}\n")
-        fh.write("\n=== XGB hyperparameters (fixed for this project) ===\n")
+        fh.write("\n=== XGB training defaults (n_estimators / early stopping) ===\n")
         _write_key_values(fh, XGB_MODEL_PARAMS, prefix="xgb")
+        fh.write(
+            "\n(Per-fold tuned max_depth, lr, etc. are columns xgb_* in the metrics CSV.)\n"
+        )
         fh.write("\n=== Best fold by test F1 ===\n")
         if best_f1_row:
             _write_key_values(
@@ -455,8 +634,10 @@ def main() -> None:
 
     print(
         f"Rows: {len(df)} | Stations: {df['location'].nunique()} | "
-        f"Per-station time-series CV | Risk quantile: {RISK_QUANTILE} | "
-        f"Min precision: {MIN_PRECISION} | "
+        f"Per-station time-series CV | Horizon: {PREDICTION_HORIZON_DAYS} day(s) ahead | "
+        f"Risk quantile: {RISK_QUANTILE} | Min precision: {MIN_PRECISION} | "
+        f"XGB search: {ENABLE_HYPERPARAMETER_SEARCH} "
+        f"({HYPERPARAMETER_SEARCH_ITERATIONS} iters/fold) | "
         f"Calibration: {USE_PROBABILITY_CALIBRATION} | "
         f"Physics gate: {USE_PHYSICS_GATE} | "
         f"Alert prob floor: {ALERT_PROB_FLOOR}\n"
@@ -478,24 +659,28 @@ def main() -> None:
                 station_test,
                 RISK_QUANTILE,
                 MIN_PRECISION,
+                location,
+                fold + 1,
             )
             if result is None:
                 continue
 
             split_metrics.append(result)
-            fold_rows.append(
-                {
-                    "level": "fold",
-                    "location": location,
-                    "fold": fold + 1,
-                    "threshold": result["threshold"],
-                    "roc_auc": result["roc_auc"],
-                    "accuracy": result["accuracy"],
-                    "precision": result["precision"],
-                    "recall": result["recall"],
-                    "f1": result["f1"],
-                }
-            )
+            fold_row = {
+                "level": "fold",
+                "location": location,
+                "fold": fold + 1,
+                "threshold": result["threshold"],
+                "train_f1": result["train_f1"],
+                "train_test_f1_gap": result["train_test_f1_gap"],
+                "roc_auc": result["roc_auc"],
+                "accuracy": result["accuracy"],
+                "precision": result["precision"],
+                "recall": result["recall"],
+                "f1": result["f1"],
+            }
+            fold_row.update(_flatten_xgb_params(result["best_xgb_params"]))
+            fold_rows.append(fold_row)
             failed = result["f1"] == 0 and result["y_true"].sum() >= MIN_TEST_POSITIVES
             if not failed:
                 scorable_metrics.append(result)
@@ -507,7 +692,8 @@ def main() -> None:
                 f"{location} fold {fold + 1}: thr={result['threshold']:.2f} | "
                 f"Prec={result['precision'] * 100:.1f}% | "
                 f"Rec={result['recall'] * 100:.1f}% | "
-                f"F1={result['f1'] * 100:.1f}%"
+                f"F1={result['f1'] * 100:.1f}% | "
+                f"train→test F1 gap={result['train_test_f1_gap'] * 100:+.1f}pp"
             )
 
     if not split_metrics:

@@ -1,0 +1,78 @@
+Model run: xgb
+Timestamp (UTC): 20261010T085020Z
+
+=== Pipeline / threshold settings ===
+model_tag = xgb
+dataset_slug = tejal5kunjir/nepal-flood-and-weather-dataset-2023-2026
+csv_name = CORRECTED_2023_2026_NEPAL_FLOOD_WEATHER_KAGGLE.csv
+risk_quantile = 0.85
+min_precision = 0.65
+min_recall_when_tuning = 0.58
+n_splits = 3
+random_state = 42
+val_fraction = 0.25
+scale_pos_weight_factor = 1.0
+use_probability_calibration = True
+use_physics_gate = True
+physics_precip7_train_quantile = 0.6
+physics_discharge_lag1_train_quantile = 0.65
+alert_prob_floor = 0.68
+prediction_horizon_days = 1
+enable_hyperparameter_search = True
+hyperparameter_search_iterations = 24
+search_n_estimators = 350
+threshold_grid_points = 181
+run_timestamp_utc = 20261010T085020Z
+false_alarms = 161
+alerts = 980
+
+=== XGB training defaults (n_estimators / early stopping) ===
+xgb.n_estimators = 900
+xgb.max_depth = 5
+xgb.learning_rate = 0.025
+xgb.min_child_weight = 4
+xgb.gamma = 0.2
+xgb.subsample = 0.88
+xgb.colsample_bytree = 0.88
+xgb.early_stopping_rounds = 50
+xgb.eval_metric = auc
+xgb.random_state = 42
+xgb.scale_pos_weight_note = computed per fold: (neg/pos) * SCALE_POS_WEIGHT_FACTOR
+
+(Per-fold tuned max_depth, lr, etc. are columns xgb_* in the metrics CSV.)
+
+=== Best fold by test F1 ===
+best_fold.location = Devghat
+best_fold.fold = 1
+best_fold.threshold = 0.68
+best_fold.train_f1 = 0.989247311827957
+best_fold.train_test_f1_gap = -0.002622606871229949
+best_fold.roc_auc = 0.9919354838709677
+best_fold.accuracy = 0.993993993993994
+best_fold.precision = 1.0
+best_fold.recall = 0.9838709677419355
+best_fold.f1 = 0.991869918699187
+best_fold.xgb_max_depth = 5
+best_fold.xgb_learning_rate = 0.05
+best_fold.xgb_min_child_weight = 3
+best_fold.xgb_gamma = 0.3
+best_fold.xgb_subsample = 0.88
+best_fold.xgb_colsample_bytree = 0.85
+
+=== Summary metrics (macro = mean over station-folds) ===
+macro.roc_auc = 0.9548931692340201
+macro.accuracy = 0.9366639366639365
+macro.precision = 0.8017831728922683
+macro.recall = 0.7277095291610644
+macro.f1 = 0.7280649983015363
+micro.roc_auc = 0.9325657582826039
+micro.accuracy = 0.9084084084084084
+micro.precision = 0.8357142857142857
+micro.recall = 0.5416666666666666
+micro.f1 = 0.6573033707865169
+operational_false_alarms = 161
+operational_alerts = 980
+operational_false_alarm_rate = 0.164286
+
+Metrics CSV: xgb_metrics_20261010T085020Z.csv
+Predictions CSV: xgb_predictions_20261010T085020Z.csv
