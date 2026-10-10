@@ -1,11 +1,11 @@
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone #used to get the current time
 from pathlib import Path
 
 import kagglehub
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier #Model we will be using
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import (
     accuracy_score,
@@ -14,12 +14,14 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit 
 
+#base directory of the project, used to save the results
 BASE_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = BASE_DIR / "results"
 MODEL_TAG = "random_forest"
 
+#kaggle dataset we will be using
 DATASET_SLUG = "tejal5kunjir/nepal-flood-and-weather-dataset-2023-2026"
 CSV_NAME = "CORRECTED_2023_2026_NEPAL_FLOOD_WEATHER_KAGGLE.csv"
 
@@ -39,7 +41,7 @@ PHYSICS_PRECIP7_TRAIN_QUANTILE = 0.60
 PHYSICS_DISCHARGE_LAG1_TRAIN_QUANTILE = 0.65
 ALERT_PROB_FLOOR = 0.68
 
-# Slow, realistic tuning (increase for even heavier runs)
+#hyperparameter search iterations
 HYPERPARAMETER_SEARCH_ITERATIONS = 28
 SEARCH_N_ESTIMATORS = 280
 FINAL_N_ESTIMATORS = 650
@@ -75,18 +77,19 @@ FEATURES = [
     "saturation_rain_interaction",
 ]
 
-
+#function to load the data from the kaggle dataset
 def load_data() -> pd.DataFrame:
     path = kagglehub.dataset_download(DATASET_SLUG)
     df = pd.read_csv(Path(path) / CSV_NAME)
     df["date"] = pd.to_datetime(df["date"])
     return df.sort_values(["location", "date"]).reset_index(drop=True)
 
-
+#function to add location features to the data
 def add_location_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     grouped = out.groupby("location", group_keys=False)
 
+    #creating features for the precipitation and discharge lags
     for lag in (1, 2, 3, 7, 14):
         out[f"precip_lag{lag}"] = grouped["precipitation_mm"].shift(lag)
         out[f"discharge_lag{lag}"] = grouped["river_discharge_m3s"].shift(lag)
@@ -110,12 +113,12 @@ def add_location_features(df: pd.DataFrame) -> pd.DataFrame:
     out[FEATURES] = out[FEATURES].fillna(0)
     return out
 
-
+#function to create labels for the data
 def station_labels(series: pd.Series, quantile: float) -> pd.Series:
     threshold = series.quantile(quantile)
     return (series > threshold).astype(int)
 
-
+#function to split the data into training and validation sets
 def split_station_train_val(
     station_train: pd.DataFrame,
     y_train: pd.Series,
@@ -134,14 +137,14 @@ def split_station_train_val(
         y_train.loc[val_mask],
     )
 
-
+#function to calculate the fbeta score
 def fbeta_score(precision: float, recall: float, beta: float = 0.5) -> float:
     if precision + recall == 0:
         return 0.0
     b2 = beta * beta
     return (1 + b2) * precision * recall / (b2 * precision + recall)
 
-
+#function to create a mask for the physics gate
 def physics_gate_mask(station_train: pd.DataFrame, station_test: pd.DataFrame) -> np.ndarray:
     precip_floor = station_train["precip_sum7"].quantile(PHYSICS_PRECIP7_TRAIN_QUANTILE)
     discharge_floor = station_train["discharge_lag1"].quantile(
@@ -151,7 +154,7 @@ def physics_gate_mask(station_train: pd.DataFrame, station_test: pd.DataFrame) -
     elevated_flow = station_test["discharge_lag1"].to_numpy() >= discharge_floor
     return heavy_rain | elevated_flow
 
-
+#function to sample the forest parameters
 def _sample_forest_params(rng: np.random.Generator) -> dict:
     return {
         "max_depth": int(rng.choice([6, 8, 10, 12, 16])),
@@ -165,7 +168,7 @@ def _sample_forest_params(rng: np.random.Generator) -> dict:
         "class_weight": rng.choice(["balanced", "balanced_subsample"]),
     }
 
-
+#function to make the random forest model
 def _make_rf(params: dict, n_estimators: int) -> RandomForestClassifier:
     return RandomForestClassifier(
         n_estimators=n_estimators,
@@ -174,7 +177,7 @@ def _make_rf(params: dict, n_estimators: int) -> RandomForestClassifier:
         **params,
     )
 
-
+#function to perform the hyperparameter search
 def hyperparameter_search(
     X_fit: pd.DataFrame,
     y_fit: pd.Series,
@@ -203,7 +206,7 @@ def hyperparameter_search(
 
     return best_params
 
-
+#function to pick the threshold for the model
 def pick_threshold(
     y_true: np.ndarray,
     y_prob: np.ndarray,
@@ -279,7 +282,7 @@ def pick_threshold(
 
     return best_threshold
 
-
+#function to evaluate the model on the test set
 def evaluate_station_split(
     station_train: pd.DataFrame,
     station_test: pd.DataFrame,
@@ -360,11 +363,11 @@ def evaluate_station_split(
         "y_prob": test_prob,
     }
 
-
+#function to flatten the random forest parameters
 def _flatten_rf_params(params: dict) -> dict:
     return {f"rf_{key}": value for key, value in params.items()}
 
-
+#function to write the key values to the file
 def _write_key_values(fh, mapping: dict, prefix: str = "") -> None:
     for key, value in mapping.items():
         label = f"{prefix}.{key}" if prefix else str(key)
@@ -373,7 +376,7 @@ def _write_key_values(fh, mapping: dict, prefix: str = "") -> None:
         else:
             fh.write(f"{label} = {value}\n")
 
-
+#function to set the pipeline settings
 def _pipeline_settings() -> dict:
     return {
         "model_tag": MODEL_TAG,
@@ -396,7 +399,7 @@ def _pipeline_settings() -> dict:
         "threshold_grid_points": THRESHOLD_GRID_POINTS,
     }
 
-
+#function to save the run artifacts
 def save_run_artifacts(
     fold_rows: list[dict],
     macro: dict,
@@ -491,7 +494,7 @@ def save_run_artifacts(
     print(f"  {pred_path.name}")
     print(f"  {settings_path.name}")
 
-
+#function to main the program
 def main() -> None:
     started = time.perf_counter()
     df = add_location_features(load_data())

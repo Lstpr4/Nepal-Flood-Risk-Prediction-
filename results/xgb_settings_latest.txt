@@ -1,5 +1,5 @@
 Model run: xgb
-Timestamp (UTC): 20261010T085020Z
+Timestamp (UTC): 20261010T091159Z
 
 === Pipeline / threshold settings ===
 model_tag = xgb
@@ -22,7 +22,7 @@ enable_hyperparameter_search = True
 hyperparameter_search_iterations = 24
 search_n_estimators = 350
 threshold_grid_points = 181
-run_timestamp_utc = 20261010T085020Z
+run_timestamp_utc = 20261010T091159Z
 false_alarms = 161
 alerts = 980
 
@@ -74,5 +74,5 @@ operational_false_alarms = 161
 operational_alerts = 980
 operational_false_alarm_rate = 0.164286
 
-Metrics CSV: xgb_metrics_20261010T085020Z.csv
-Predictions CSV: xgb_predictions_20261010T085020Z.csv
+Metrics CSV: xgb_metrics_20261010T091159Z.csv
+Predictions CSV: xgb_predictions_20261010T091159Z.csv
