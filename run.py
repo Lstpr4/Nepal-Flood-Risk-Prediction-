@@ -6,7 +6,7 @@ from pathlib import Path
 
 # project root (folder containing this file)
 BASE_DIR = Path(__file__).resolve().parent
-print(BASE_DIR)
+
 
 # all training/evaluation scripts to run
 programs = [
