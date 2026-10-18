@@ -1,9 +1,0 @@
-Model run: lstm
-Timestamp (UTC): 20261018T061200Z
-sequence_length = 14
-hidden_size = 64
-prediction_horizon_days = 1
-macro = {'roc_auc': 0.9200055475386644, 'accuracy': 0.8846573846573847, 'precision': 0.6277266248889736, 'recall': 0.6673052035170993, 'f1': 0.5538681880921336}
-micro = {'roc_auc': 0.8935532720654968, 'accuracy': 0.8632561132561133, 'precision': 0.6005089058524173, 'recall': 0.46825396825396826, 'f1': 0.5261984392419174}
-false_alarms = 471
-alerts = 1179

@@ -192,7 +192,7 @@ docker compose --profile export run --rm export
 docker compose --profile api up api
 ```
 
-Set `KAGGLE_USERNAME` and `KAGGLE_KEY` in your environment or a `.env` file for dataset download.
+Copy `.env.example` → `.env` and add your Kaggle username and API key (from [Kaggle Settings → API](https://www.kaggle.com/settings)). Docker Compose reads `.env` automatically for dataset download.
 
 ---
 
