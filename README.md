@@ -158,13 +158,21 @@ python compare_models.py
 **REST API** (after export):
 
 ```bash
+python export_serving_model.py   # if artifacts/serving_bundle.joblib is missing
 uvicorn serve:app --reload --port 8000
 ```
 
-- `GET /health` — model loaded?
-- `GET /locations` — station names
-- `GET /features` — required input fields
-- `POST /predict` — JSON: `{"location": "Devghat", "features": {...}}`
+Open **http://127.0.0.1:8000/docs** (use `127.0.0.1`, not `0.0.0.0`).
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /health` | Bundle loaded? (`status: ok` means ready) |
+| `GET /locations` | Station names |
+| `GET /locations/Devghat/sample` | Full example `features` dict for one station |
+| `POST /predict/demo` | Body: `{"location": "Devghat"}` — easiest test (uses bundled sample row) |
+| `POST /predict` | Body: `{"location": "...", "features": { all 27 fields }}` |
+
+If `/health` shows `no_model`, run `python export_serving_model.py` first. After re-export, restart uvicorn.
 
 ---
 

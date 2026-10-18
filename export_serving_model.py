@@ -1,7 +1,3 @@
-"""Train per-station XGBoost models and save a bundle for FastAPI inference."""
-
-from __future__ import annotations
-
 import json
 from pathlib import Path
 
@@ -99,12 +95,17 @@ def train_location_bundle(station_df: pd.DataFrame, location: str) -> dict:
             ),
         }
 
+    last_row = station_df.iloc[-1]
+    sample_features = {f: float(last_row[f]) for f in FEATURES}
+
     return {
         "location": location,
         "model": model,
         "calibrator": calibrator,
         "threshold": float(threshold),
         "physics": physics,
+        "sample_features": sample_features,
+        "sample_date": str(last_row["date"].date()),
     }
 
 
