@@ -1,0 +1,31 @@
+services:
+  train:
+    build: .
+    command: python run.py
+    volumes:
+      - ./results:/app/results
+      - ./artifacts:/app/artifacts
+    environment:
+      - KAGGLE_USERNAME=${KAGGLE_USERNAME:-}
+      - KAGGLE_KEY=${KAGGLE_KEY:-}
+
+  export:
+    build: .
+    command: python export_serving_model.py
+    volumes:
+      - ./artifacts:/app/artifacts
+    environment:
+      - KAGGLE_USERNAME=${KAGGLE_USERNAME:-}
+      - KAGGLE_KEY=${KAGGLE_KEY:-}
+    profiles:
+      - export
+
+  api:
+    build: .
+    command: uvicorn serve:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./artifacts:/app/artifacts
+    profiles:
+      - api

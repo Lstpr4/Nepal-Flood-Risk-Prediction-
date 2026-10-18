@@ -1,5 +1,5 @@
 Model run: random_forest
-Timestamp (UTC): 20261010T091252Z
+Timestamp (UTC): 20261018T061320Z
 
 === Pipeline / search settings ===
 model_tag = random_forest
@@ -20,46 +20,46 @@ hyperparameter_search_iterations = 28
 search_n_estimators = 280
 final_n_estimators = 650
 threshold_grid_points = 181
-run_timestamp_utc = 20261010T091252Z
-false_alarms = 195
-alerts = 887
-total_wall_seconds = 227.01369974995032
+run_timestamp_utc = 20261018T061320Z
+false_alarms = 176
+alerts = 1040
+total_wall_seconds = 213.98189695808105
 
 === Best fold by test F1 (includes tuned RF params) ===
-best_fold.location = Devghat
-best_fold.fold = 3
-best_fold.threshold = 0.7499999999999999
-best_fold.search_seconds = 10.199303917121142
-best_fold.train_f1 = 0.961038961038961
-best_fold.roc_auc = 0.9967253521126761
-best_fold.accuracy = 0.9790419161676647
+best_fold.location = Chameliya/Nayalbadi
+best_fold.fold = 2
+best_fold.threshold = 0.7849999999999999
+best_fold.search_seconds = 10.77867241599597
+best_fold.train_f1 = 0.9866666666666667
+best_fold.roc_auc = 0.999028277135361
+best_fold.accuracy = 0.978978978978979
 best_fold.precision = 1.0
-best_fold.recall = 0.86
-best_fold.f1 = 0.9247311827956989
+best_fold.recall = 0.9146341463414634
+best_fold.f1 = 0.9554140127388535
 best_fold.rf_max_depth = 10
-best_fold.rf_min_samples_leaf = 12
-best_fold.rf_min_samples_split = 30
-best_fold.rf_max_features = 0.55
+best_fold.rf_min_samples_leaf = 20
+best_fold.rf_min_samples_split = 20
+best_fold.rf_max_features = 0.45
 best_fold.rf_class_weight = balanced
 
 === Summary metrics (macro = mean over station-folds) ===
-macro.roc_auc = 0.9203535646701393
-macro.accuracy = 0.9159073158031764
-macro.precision = 0.8765724996347991
-macro.recall = 0.6050399290150842
-macro.f1 = 0.6441529525356628
-macro.train_f1 = 0.8701976185679617
-macro.test_f1 = 0.6441529525356628
-micro.roc_auc = 0.9165800941246773
-micro.accuracy = 0.9023332645054718
-micro.precision = 0.7801578354002254
-micro.recall = 0.47955647955647956
-micro.f1 = 0.5939914163090129
-operational_false_alarms = 195
-operational_alerts = 887
-operational_false_alarm_rate = 0.219842
-total_wall_seconds = 227.01
-avg_tune_seconds_per_fold = 7.81
+macro.roc_auc = 0.957663195222088
+macro.accuracy = 0.9390640640640641
+macro.precision = 0.7878560572553451
+macro.recall = 0.7273672452398644
+macro.f1 = 0.7184580479869874
+macro.train_f1 = 0.8518049807413267
+macro.test_f1 = 0.7184580479869874
+micro.roc_auc = 0.9500643596745747
+micro.accuracy = 0.9116259116259117
+micro.precision = 0.8307692307692308
+micro.recall = 0.5714285714285714
+micro.f1 = 0.677115987460815
+operational_false_alarms = 176
+operational_alerts = 1040
+operational_false_alarm_rate = 0.169231
+total_wall_seconds = 213.98
+avg_tune_seconds_per_fold = 7.62
 
-Per-fold RF params are columns rf_* in random_forest_metrics_20261010T091252Z.csv
-Predictions CSV: random_forest_predictions_20261010T091252Z.csv
+Per-fold RF params are columns rf_* in random_forest_metrics_20261018T061320Z.csv
+Predictions CSV: random_forest_predictions_20261018T061320Z.csv

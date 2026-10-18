@@ -1,0 +1,65 @@
+Model run: random_forest
+Timestamp (UTC): 20261018T061320Z
+
+=== Pipeline / search settings ===
+model_tag = random_forest
+dataset_slug = tejal5kunjir/nepal-flood-and-weather-dataset-2023-2026
+csv_name = CORRECTED_2023_2026_NEPAL_FLOOD_WEATHER_KAGGLE.csv
+risk_quantile = 0.85
+min_precision = 0.65
+min_recall_when_tuning = 0.58
+n_splits = 3
+random_state = 42
+val_fraction = 0.25
+use_probability_calibration = True
+use_physics_gate = True
+physics_precip7_train_quantile = 0.6
+physics_discharge_lag1_train_quantile = 0.65
+alert_prob_floor = 0.68
+hyperparameter_search_iterations = 28
+search_n_estimators = 280
+final_n_estimators = 650
+threshold_grid_points = 181
+run_timestamp_utc = 20261018T061320Z
+false_alarms = 176
+alerts = 1040
+total_wall_seconds = 213.98189695808105
+
+=== Best fold by test F1 (includes tuned RF params) ===
+best_fold.location = Chameliya/Nayalbadi
+best_fold.fold = 2
+best_fold.threshold = 0.7849999999999999
+best_fold.search_seconds = 10.77867241599597
+best_fold.train_f1 = 0.9866666666666667
+best_fold.roc_auc = 0.999028277135361
+best_fold.accuracy = 0.978978978978979
+best_fold.precision = 1.0
+best_fold.recall = 0.9146341463414634
+best_fold.f1 = 0.9554140127388535
+best_fold.rf_max_depth = 10
+best_fold.rf_min_samples_leaf = 20
+best_fold.rf_min_samples_split = 20
+best_fold.rf_max_features = 0.45
+best_fold.rf_class_weight = balanced
+
+=== Summary metrics (macro = mean over station-folds) ===
+macro.roc_auc = 0.957663195222088
+macro.accuracy = 0.9390640640640641
+macro.precision = 0.7878560572553451
+macro.recall = 0.7273672452398644
+macro.f1 = 0.7184580479869874
+macro.train_f1 = 0.8518049807413267
+macro.test_f1 = 0.7184580479869874
+micro.roc_auc = 0.9500643596745747
+micro.accuracy = 0.9116259116259117
+micro.precision = 0.8307692307692308
+micro.recall = 0.5714285714285714
+micro.f1 = 0.677115987460815
+operational_false_alarms = 176
+operational_alerts = 1040
+operational_false_alarm_rate = 0.169231
+total_wall_seconds = 213.98
+avg_tune_seconds_per_fold = 7.62
+
+Per-fold RF params are columns rf_* in random_forest_metrics_20261018T061320Z.csv
+Predictions CSV: random_forest_predictions_20261018T061320Z.csv

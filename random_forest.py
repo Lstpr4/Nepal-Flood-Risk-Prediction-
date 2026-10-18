@@ -14,7 +14,9 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import TimeSeriesSplit 
+from sklearn.model_selection import TimeSeriesSplit
+
+from pipeline_common import PREDICTION_HORIZON_DAYS, prepare_station_horizon_frames
 
 #base directory of the project, used to save the results
 BASE_DIR = Path(__file__).resolve().parent
@@ -294,8 +296,11 @@ def evaluate_station_split(
     if len(station_train) < MIN_TRAIN_ROWS or len(station_test) == 0:
         return None
 
-    y_train = station_labels(station_train["river_discharge_m3s"], quantile)
-    y_test = station_labels(station_test["river_discharge_m3s"], quantile)
+    tr, te, y_train, y_test = prepare_station_horizon_frames(
+        station_train, station_test, quantile, PREDICTION_HORIZON_DAYS
+    )
+    if len(tr) < MIN_TRAIN_ROWS or len(te) == 0:
+        return None
 
     if (
         y_train.sum() < MIN_TRAIN_POSITIVES
@@ -304,9 +309,7 @@ def evaluate_station_split(
     ):
         return None
 
-    X_fit, y_fit, X_val, y_val = split_station_train_val(
-        station_train, y_train, VAL_FRACTION
-    )
+    X_fit, y_fit, X_val, y_val = split_station_train_val(tr, y_train, VAL_FRACTION)
     if y_fit.sum() == 0 or len(np.unique(y_val)) < 2:
         return None
 
@@ -319,7 +322,7 @@ def evaluate_station_split(
 
     fit_prob = model.predict_proba(X_fit)[:, 1]
     val_prob = model.predict_proba(X_val)[:, 1]
-    test_prob = model.predict_proba(station_test[FEATURES])[:, 1]
+    test_prob = model.predict_proba(te[FEATURES])[:, 1]
 
     if USE_PROBABILITY_CALIBRATION and len(np.unique(y_val)) >= 2:
         calibrator = IsotonicRegression(out_of_bounds="clip")
@@ -338,7 +341,7 @@ def evaluate_station_split(
     test_pred = (test_prob >= effective_threshold).astype(int)
 
     if USE_PHYSICS_GATE:
-        gate = physics_gate_mask(station_train, station_test)
+        gate = physics_gate_mask(station_train, te)
         test_pred = (test_pred.astype(bool) & gate).astype(int)
 
     elapsed = time.perf_counter() - t0

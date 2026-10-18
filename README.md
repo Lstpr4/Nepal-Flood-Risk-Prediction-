@@ -38,7 +38,8 @@ Build a **rigorous, comparable** flood-/discharge-risk modelling pipeline that:
 2. Evaluates **each station** on its own hydrological behaviour.
 3. Optimizes for **operational metrics**—F1, precision, recall, and **false alarm rate**—not accuracy alone.
 4. Supports **next-day (1-day-ahead) risk** so predictions align with **lead time** for human response.
-5. Compares **gradient boosting (XGBoost)** vs **Random Forest** under the same evaluation contract.
+5. Compares **XGBoost**, **Random Forest**, and **PyTorch LSTM** under the same evaluation contract.
+6. **Docker** reproducibility, **FastAPI** inference, and an auto-generated **three-way metrics table**.
 
 ### Action
 
@@ -51,7 +52,9 @@ Build a **rigorous, comparable** flood-/discharge-risk modelling pipeline that:
   - **Alert probability floor** to suppress low-confidence alarms
   - Optional **physics gate** (recent 7-day rain or elevated lagged discharge) so alerts align with plausible flood drivers
 - **Reproducible outputs:** metrics, pooled predictions, and plain-text settings under `results/`.
-- **`run.py`:** runs **XGBoost and Random Forest pipelines in parallel** for faster experimentation.
+- **`run.py`:** trains **XGBoost, Random Forest, and LSTM in parallel**, exports serving models, builds comparison table.
+- **Docker / FastAPI:** containerized runs + REST `/predict` for per-station risk scores.
+- **`compare_models.py`:** writes `results/model_comparison_latest.md` (three-way table).
 
 ### Result
 
@@ -75,7 +78,8 @@ This project is a **research and engineering baseline**, not a deployed national
 1. **Lead time:** 1-day-ahead targets connect ML outputs to **“tomorrow’s risk”**, the window where SMS alerts, sirens, and evacuation planning actually happen.
 2. **False alarms matter:** In disaster settings, **each bogus alert trains people to ignore the next one**. Tracking false alarms alongside F1 makes improvement measurable in **human terms** (trust, compliance, lives).
 3. **Local rivers, local thresholds:** A single Nepal-wide rule would fail; **per-station CV and thresholds** respect that Koshi, Karnali, and mid-hill tributaries do not share one “normal” discharge.
-4. **Comparable models:** Running **XGBoost vs Random Forest** under the same splits supports evidence-based choices for speed, interpretability, and accuracy—before anyone plugs a model into an ops room.
+4. **Comparable models:** **XGBoost vs Random Forest vs LSTM** under the same splits supports evidence-based choices before deployment.
+5. **Docker + API:** Shows MLOps-style packaging—not just notebooks.
 
 If integrated with **IMD/monsoon feeds, river gauges, and municipal alerting**, pipelines like this could **shorten the path from data to decision**: prioritizing villages, staging rescue assets, and giving families **one more night** to move uphill when the model and physics agree the river is trending wrong.
 
@@ -93,7 +97,7 @@ Ways this work could be ** pushed further** toward production-grade early warnin
 | **Spatial modelling** | Graph or basin-wide models linking upstream → downstream stations for cascade floods. |
 | **Human-in-the-loop evaluation** | Case studies on known 2023–2026 events; expert review of missed hits and false alarms. |
 | **Fairness & coverage** | Explicit metrics for remote stations with sparse data so warnings do not only work where sensors are richest. |
-| **Deployment** | API + dashboard, cell-broadcast hooks, and drills with local disaster authorities. |
+| **Deployment** | ✅ FastAPI starter done; add dashboard, cell-broadcast hooks, drills with authorities. |
 | **Physics + ML hybrid** | Rainfall–runoff simulators as features or sanity checks alongside learned models. |
 
 ---
@@ -101,56 +105,95 @@ Ways this work could be ** pushed further** toward production-grade early warnin
 ## Project structure
 
 ```
-Water prediction/
-├── XGBClassifier.py    # XGBoost pipeline (horizon, search, calibration, gates)
-├── random_forest.py      # Random Forest pipeline (matched evaluation)
-├── run.py                # Run both models in parallel
-├── results/              # metrics, predictions, settings (generated)
-└── README.md
+├── pipeline_common.py      # shared data, labels, thresholds
+├── XGBClassifier.py          # XGBoost + HPO
+├── random_forest.py          # Random Forest + HPO (1-day horizon aligned)
+├── lstm_classifier.py        # PyTorch LSTM baseline (14-day sequences)
+├── export_serving_model.py   # per-station XGB bundle for API
+├── serve.py                  # FastAPI inference
+├── compare_models.py         # three-way metrics table
+├── run.py                    # full pipeline orchestration
+├── Dockerfile / docker-compose.yml
+├── artifacts/                # serving_bundle.joblib (generated)
+└── results/                  # metrics, model_comparison_latest.md
 ```
+
+---
+
+## Three-way model comparison
+
+After `python run.py`, open **`results/model_comparison_latest.md`** (or `.csv`).  
+Same temporal CV and 1-day horizon; LSTM uses 14-day feature sequences.
 
 ---
 
 ## Requirements
 
-- Python 3.10+ recommended  
-- `pandas`, `numpy`, `scikit-learn`, `xgboost`, `kagglehub`
-
-Example:
-
 ```bash
-pip install pandas numpy scikit-learn xgboost kagglehub
+pip install -r requirements.txt
 ```
 
-Configure [Kaggle API credentials](https://github.com/Kaggle/kaggle-api) so `kagglehub` can download the dataset on first run.
+Configure [Kaggle API credentials](https://github.com/Kaggle/kaggle-api) for `kagglehub`.
 
 ---
 
-## How to run
+## How to run (local)
 
-**Both models in parallel:**
+**Full pipeline** (train 3 models → export API bundle → comparison table):
 
 ```bash
 python run.py
 ```
 
-**Single model:**
+**Single components:**
 
 ```bash
 python XGBClassifier.py
 python random_forest.py
+python lstm_classifier.py
+python export_serving_model.py
+python compare_models.py
 ```
 
-After a run, inspect:
+**REST API** (after export):
 
-- `results/xgb_metrics_latest.csv` / `results/rf_metrics_latest.csv`
-- `results/xgb_settings_latest.txt` / `results/rf_settings_latest.txt`
+```bash
+uvicorn serve:app --reload --port 8000
+```
 
-Key toggles at the top of `XGBClassifier.py` (and mirrored concepts in `random_forest.py`):
+- `GET /health` — model loaded?
+- `GET /locations` — station names
+- `GET /features` — required input fields
+- `POST /predict` — JSON: `{"location": "Devghat", "features": {...}}`
 
-- `PREDICTION_HORIZON_DAYS` — `0` same-day risk, `1` next-day forecast  
-- `ENABLE_HYPERPARAMETER_SEARCH` — per-fold tuning  
-- `USE_PHYSICS_GATE`, `ALERT_PROB_FLOOR`, `MIN_PRECISION` — alert behaviour  
+---
+
+## Docker
+
+Train everything inside a container (mounts `results/` and `artifacts/`):
+
+```bash
+docker compose build
+docker compose run --rm train
+```
+
+Export + API (profiles):
+
+```bash
+docker compose --profile export run --rm export
+docker compose --profile api up api
+```
+
+Set `KAGGLE_USERNAME` and `KAGGLE_KEY` in your environment or a `.env` file for dataset download.
+
+---
+
+## Key settings
+
+Shared in `pipeline_common.py` (and XGB-specific toggles in `XGBClassifier.py`):
+
+- `PREDICTION_HORIZON_DAYS` — `0` same-day, `1` next-day (default **1**)
+- `USE_PHYSICS_GATE`, `ALERT_PROB_FLOOR`, `MIN_PRECISION` — alert behaviour
 
 ---
 

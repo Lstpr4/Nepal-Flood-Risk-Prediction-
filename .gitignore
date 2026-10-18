@@ -1,2 +1,6 @@
 __pycache__/
 *.__pycache__/
+.kagglehub/
+artifacts/*.joblib
+.env
+*.env

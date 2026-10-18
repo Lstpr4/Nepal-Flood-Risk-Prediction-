@@ -1,0 +1,16 @@
+{
+  "locations": [
+    "Bahrabise",
+    "Belsot",
+    "Bhada Bridge",
+    "Chameliya/Nayalbadi",
+    "Chatara",
+    "Chisapani",
+    "Devghat",
+    "Khokana",
+    "Kusum",
+    "Rasuwagadhi"
+  ],
+  "n_features": 27,
+  "bundle_path": "serving_bundle.joblib"
+}
